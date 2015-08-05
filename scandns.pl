@@ -4,11 +4,14 @@
 # Summary:        dns cleanup tool
 #
 # Author:         Jon Schatz
+#                 Mark Ruys
 # E-Mail:         jon@divisionbyzero.com
-# Org:            
+# Org:            Jon Schatz
 #
-# Orig-Date:      22-Mar-00 at 13:30:53
-# Last-Mod:       19-Jun-00 at 16:24:42 by 
+# Source:         https://github.com/markruys/scandns
+#
+# Orig-Date:      22-Mar-2000 at 13:30:53
+# Last-Mod:       19-Jun-2015 at 12:04:00 by markruys
 #
 #    This program is free software; you can redistribute it and/or modify it
 #    under the terms of the GNU General Public License as published
@@ -19,26 +22,15 @@
 #    but WITHOUT ANY WARRANTY; without even the implied warranty of
 #    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See either
 #    the GNU General Public License or the Artistic License for more details.
-#
-# 
-# $Source: /home/jschatz/.cvs/el/file-hdr/hdr.perl,v $
-# $Date: 1999/12/23 00:06:23 $
-# $Revision: 1.1.1.1 $
-# $Author: tkunze $
-# $State: Exp $
-# $Locker:  $
-#
-# -*- EOF -*-
-
 
 use IO::Socket;
 use Net::Netmask;
+use POSIX ':signal_h';
 use strict;
-
-my ($network)=@ARGV;
 
 #separate the netmask from the network
 
+my $network = $ARGV[0] || "";
 my ($ip_address,$netmask) = split /[\/||:]/ , $network;
 my $address;
 
@@ -81,36 +73,44 @@ sub checkdns {
     &no_ptr("$ip_address"); 
     return; 
   }
-  
-  my $reverse_packed_ip_address;
-  $reverse_packed_ip_address=gethostbyname($hostname);
-  
-  if (length($reverse_packed_ip_address)!=4) { 
+
+  my @reverse_packed_ip_address;
+  eval {
+    sigaction SIGALRM, new POSIX::SigAction sub { die "alarm\n" }
+        or die "Error setting SIGALRM handler: $!\n";
+    alarm 10;
+    ($_ , $_, $_, $_, @reverse_packed_ip_address) = gethostbyname $hostname;
+    alarm 0;
+  };
+  if ($@) {
+    die unless $@ eq "alarm\n";
+  }
+
+  if ( ! @reverse_packed_ip_address ) {
     &no_a("$ip_address","$hostname"); 
     return;
   }
   
-  my ($reverse_ip_address)=inet_ntoa($reverse_packed_ip_address);
-  
-  if ($reverse_ip_address ne $ip_address) {
-    print("$ip_address => $hostname => $reverse_ip_address \n");
+  my @reverse_ip_address = map { inet_ntoa($_) } @reverse_packed_ip_address;
+
+  if ( ! grep(/^$ip_address$/, @reverse_ip_address) ) {
+    print("ERROR: $ip_address => $hostname => ".join(", ", @reverse_ip_address)." \n");
   }
-  
   else {
-    print("$ip_address => $hostname \n");
+    print("OK:    $ip_address => $hostname \n");
   }
 }
 
 sub no_ptr {
   my ($ip_address)=@_;
-  print "$ip_address => no PTR record\n";
+  print "ERROR: $ip_address => no PTR record\n";
   
   return;
 }
 
 sub no_a {
   my ($ip_address, $hostname)=@_;
-  print "$ip_address => $hostname => $hostname has no A record\n";
+  print "ERROR: $ip_address => $hostname => no A or CNAME record\n";
   return;
 }
 
@@ -130,7 +130,8 @@ sub usage {
 }
 
 sub validnet {
-  my ($netmask)=@_;
+  return(1) unless $_[0];
+  my $netmask = $_[0];
   return(1) if (validip($netmask)) ;
   return(1) if (($netmask>=0)&&($netmask<=32));
 }
@@ -140,8 +141,8 @@ sub validnet {
 #that much overhead.
 
 sub validip {
-  my ($ip)=@_;
-  my $x;
+  my $ip = $_[0] || "";
+  my $x = 0;
   foreach ($ip=~/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/){ 
     $x++ if(($_>=0)&&($_<=255)); 
   }
